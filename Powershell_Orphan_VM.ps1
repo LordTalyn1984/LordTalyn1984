@@ -1,0 +1,76 @@
+<#
+.SYNOPSIS
+    Finds orphaned (unattached) Azure Managed Disks to help reduce cloud costs.
+
+.DESCRIPTION
+    This script queries all Azure Subscriptions accessible by the current context,
+    scans for Managed Disks that are not attached to any Virtual Machine (ManagedBy is null),
+    and exports the results to a CSV report.
+    
+    It is designed for Azure SysAdmins and Cloud Architects to assist in cost optimization
+    and governance.
+
+.AUTHOR
+    Gavin Dobbs
+    Cloud Engineer | Azure Specialist
+
+.EXAMPLE
+    .\Find-OrphanedDisks.ps1 -ExportPath "C:\Temp\OrphanedDisks.csv"
+#>
+
+[CmdletBinding()]
+param (
+    [Parameter(Mandatory=$false)]
+    [string]$ExportPath = ".\OrphanedDisksReport.csv"
+)
+
+# Login check (silent)
+try {
+    $context = Get-AzContext -ErrorAction Stop
+    Write-Host "Connected as: $($context.Account)" -ForegroundColor Cyan
+}
+catch {
+    Write-Warning "Not connected to Azure. Please run 'Connect-AzAccount' first."
+    break
+}
+
+$report = @()
+
+# Get all subscriptions
+$subs = Get-AzSubscription
+Write-Host "Scanning $($subs.Count) subscriptions for orphaned disks..." -ForegroundColor Yellow
+
+foreach ($sub in $subs) {
+    Set-AzContext -SubscriptionId $sub.Id | Out-Null
+    
+    # Get all disks in current sub
+    $disks = Get-AzDisk
+    
+    foreach ($disk in $disks) {
+        # 'ManagedBy' is null if the disk is not attached to a VM
+        if ($null -eq $disk.ManagedBy) {
+            $info = [PSCustomObject]@{
+                SubscriptionName = $sub.Name
+                ResourceGroup    = $disk.ResourceGroupName
+                DiskName         = $disk.Name
+                SizeGB           = $disk.DiskSizeGB
+                Sku              = $disk.Sku.Name
+                Location         = $disk.Location
+                CreatedTime      = $disk.TimeCreated
+                CostStatus       = "Wasted Spend"
+            }
+            $report += $info
+            Write-Host "Found Orphan: $($disk.Name) ($($disk.DiskSizeGB)GB)" -ForegroundColor Red
+        }
+    }
+}
+
+# Export results
+if ($report.Count -gt 0) {
+    $report | Export-Csv -Path $ExportPath -NoTypeInformation
+    Write-Host "Scan Complete. Found $($report.Count) orphaned disks." -ForegroundColor Green
+    Write-Host "Report saved to: $ExportPath" -ForegroundColor Green
+}
+else {
+    Write-Host "Excellent! No orphaned disks found." -ForegroundColor Green
+}
